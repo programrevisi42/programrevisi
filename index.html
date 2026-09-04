@@ -1032,7 +1032,8 @@ function renderHarian(){
     html+=`<div class="msg" id="harianMsg${sess.key}"></div></div>`;
   });
 
-  html+=`<button class="btn-uni-add" style="width:100%;margin-bottom:14px" onclick="submitHarian()">💾 SIMPAN SEMUA SESI HARI INI</button>`;
+  html+=`<button class="btn-uni-add" style="width:100%;margin-bottom:6px" onclick="submitHarian()">💾 SIMPAN SEMUA SESI HARI INI</button>`;
+  html+=`<div id="harianSupabaseStatus" style="font-size:10px;color:var(--dim);text-align:center;margin-bottom:14px;min-height:14px">Menunggu penyimpanan ke Supabase…</div>`;
 
   html+=`<div class="divider"></div>
   <div id="historicalSyncPanel"></div>
@@ -2990,9 +2991,29 @@ async function refreshHarianHistoryRemote(reason='manual'){
     return false;
   }finally{_harianHistoryRefreshBusy=false;}
 }
-function saveRawLog(){
+async function saveRawLog(){
   try{lsSet('tah2_rawlog',JSON.stringify(rawLog));}catch(e){}
-  SBData.replaceRawLog(rawLog).then(r=>{if(!r.ok)logTelemetryError('saveRawLog(Supabase)',new Error(r.reason||'unknown'));}).catch(err=>logTelemetryError('saveRawLog(Supabase)',err));
+  const status=$id('harianSupabaseStatus');
+  if(status){status.textContent='⏳ Menyimpan ke Supabase…';status.style.color='var(--gold)';}
+  try{
+    if(typeof SBData==='undefined'||!SBData.replaceRawLog){throw new Error('Modul Supabase belum siap.');}
+    let r=null,lastErr=null;
+    for(let attempt=1;attempt<=3;attempt++){
+      try{r=await SBData.replaceRawLog(rawLog);if(r&&r.ok)break;lastErr=new Error(r&&r.reason||'Gagal simpan raw_log');}
+      catch(e){lastErr=e;}
+      if(attempt<3)await new Promise(resolve=>setTimeout(resolve,500*attempt));
+    }
+    if(r&&r.ok){
+      if(status){status.textContent='✓ TERSIMPAN DI SUPABASE';status.style.color='var(--green)';}
+      return r;
+    }
+    throw lastErr||new Error('Gagal simpan raw_log');
+  }catch(err){
+    if(status){status.textContent='⚠ GAGAL SIMPAN KE SUPABASE — data belum dikonfirmasi tersimpan';status.style.color='var(--red)';}
+    try{logTelemetryError('saveRawLog(Supabase)',err);}catch(e2){}
+    console.warn('[HARIAN V1] Supabase save failed:',err&&err.message||err);
+    return{ok:false,reason:err&&err.message||String(err)};
+  }
 }
 // Tombstone utk entri Riwayat Input Harian yg SENGAJA dihapus pengguna
 // (lihat deleteHarianLogEntry). Tanpa ini, sync (_unionAppendOnly) akan
@@ -11670,7 +11691,17 @@ function _harianV2SetOwnRaw(dateISO,sessKey,slot,value){
   if(raw.length===8){
     const row=harianV2ResultLog.find(x=>x&&x.key===k);
     if(row){row.raw=raw;saveHarianV2ResultLog();}
-    try{if(typeof SBData!=='undefined'&&SBData.upsertHarianV2Audit)SBData.upsertHarianV2Audit({entry_date:dateISO,sess_key:sessKey,slot,raw,engine_version:'HARIAN-V2-v1.0'}).catch(()=>{});}catch(e){}
+    try{
+      if(typeof SBData!=='undefined'&&SBData.upsertHarianV2Audit){
+        (async()=>{
+          for(let attempt=1;attempt<=3;attempt++){
+            try{const r=await SBData.upsertHarianV2Audit({entry_date:dateISO,sess_key:sessKey,slot,raw,engine_version:'HARIAN-V2-v1.0'});if(r&&r.ok)return;if(attempt===3)console.warn('[HARIAN V2] gagal simpan RAW ke Supabase:',r&&r.reason||'unknown');}
+            catch(e){if(attempt===3)console.warn('[HARIAN V2] gagal simpan RAW ke Supabase:',e&&e.message||e);}
+            if(attempt<3)await new Promise(r=>setTimeout(r,400*attempt));
+          }
+        })();
+      }
+    }catch(e){}
     // Render hanya setelah 8 digit lengkap agar cursor/input tidak reset setiap ketikan.
     setTimeout(()=>renderHarianV2(),0);
   }
@@ -11714,7 +11745,14 @@ function _harianV2SaveResult(dateISO,sessKey,slot){
   harianV2RawDraft[key]=raw;saveHarianV2RawDraft();saveHarianV2ResultLog();
   try{
     if(typeof SBData!=='undefined'&&SBData.upsertHarianV2Audit){
-      SBData.upsertHarianV2Audit({entry_date:dateISO,sess_key:sessKey,slot,raw,raw_slot_1:rawList[0]?.digits||'',raw_slot_2:rawList[1]?.digits||'',result_input:result,result_value:resultValue,result_digits:/^\d{2,4}$/.test(result)?result:null,result_trace:trace,cross_slot:crossSlot,cross_sources:crossSources,candidates4:pred?pred.cand4:[],candidates3:pred?pred.cand3:[],candidates2:pred?pred.cand2:[],hit_summary:hitSummary,engine_version:'HARIAN-V2-v1.0'}).then(r=>{if(msg&&!r.ok){msg.textContent='✓ Lokal tersimpan · Supabase: '+(r.reason||'gagal');msg.style.color='var(--gold)';}}).catch(()=>{});
+      (async()=>{
+        const payload={entry_date:dateISO,sess_key:sessKey,slot,raw,raw_slot_1:rawList[0]?.digits||'',raw_slot_2:rawList[1]?.digits||'',result_input:result,result_value:resultValue,result_digits:/^\d{2,4}$/.test(result)?result:null,result_trace:trace,cross_slot:crossSlot,cross_sources:crossSources,candidates4:pred?pred.cand4:[],candidates3:pred?pred.cand3:[],candidates2:pred?pred.cand2:[],hit_summary:hitSummary,engine_version:'HARIAN-V2-v1.0'};
+        for(let attempt=1;attempt<=3;attempt++){
+          try{const r=await SBData.upsertHarianV2Audit(payload);if(r&&r.ok){if(msg){msg.textContent='✓ Tersimpan · Supabase OK';msg.style.color='var(--green)';}return;}if(attempt===3&&msg){msg.textContent='✓ Lokal tersimpan · Supabase: '+(r&&r.reason||'gagal');msg.style.color='var(--gold)';}}
+          catch(e){if(attempt===3&&msg){msg.textContent='✓ Lokal tersimpan · Supabase gagal';msg.style.color='var(--gold)';}}
+          if(attempt<3)await new Promise(r=>setTimeout(r,400*attempt));
+        }
+      })();
     }
   }catch(eSB){}
   if(msg){msg.textContent=`✓ Tersimpan · ${crossSlot?'CROSS-SLOT aktif':'raw sendiri'}${zonk?' · ZONK':''} · catatan Supabase`;msg.style.color='var(--green)';}
@@ -13682,34 +13720,36 @@ async function boot(){
     // penyimpanan, ditarik ulang tiap boot (fire tapi ditunggu/await, biar
     // data tampil lengkap sebelum render, bukan fire-and-forget).
     try{
-      const[_hpg,_ps2,_ps3,_ps4,_psv2_2,_psv2_3,_psv2_4,_hv2audit]=await Promise.all([
-        SBData.loadHarianPredGenLogRemote(),
-        SBData.loadPredSlotLogRemote(2),SBData.loadPredSlotLogRemote(3),SBData.loadPredSlotLogRemote(4),
-        SBData.loadPredSlotLogV2Remote(2),SBData.loadPredSlotLogV2Remote(3),SBData.loadPredSlotLogV2Remote(4),
-        SBData.loadHarianV2AuditRemote()
-      ]);
-      harianPredGenLog=_hpg;
-      predSlotLog[2]=_ps2;predSlotLog[3]=_ps3;predSlotLog[4]=_ps4;
-      predSlotLogV2[2]=_psv2_2;predSlotLogV2[3]=_psv2_3;predSlotLogV2[4]=_psv2_4;
-      // Hydrate V2 RAW + RESULT dari tier Supabase terbaru. Data ini hanya milik V2.
-      if(Array.isArray(_hv2audit)){
-        _hv2audit.forEach(r=>{
+      // Setiap sumber histori di-hydrate independen. Kegagalan satu query tidak
+      // boleh mengosongkan histori domain lain setelah logout -> login.
+      const _remoteJobs=[
+        ['hpg',SBData.loadHarianPredGenLogRemote()],
+        ['ps2',SBData.loadPredSlotLogRemote(2)],['ps3',SBData.loadPredSlotLogRemote(3)],['ps4',SBData.loadPredSlotLogRemote(4)],
+        ['psv2_2',SBData.loadPredSlotLogV2Remote(2)],['psv2_3',SBData.loadPredSlotLogV2Remote(3)],['psv2_4',SBData.loadPredSlotLogV2Remote(4)],
+        ['hv2audit',SBData.loadHarianV2AuditRemote()]
+      ];
+      const _remoteRes=await Promise.allSettled(_remoteJobs.map(x=>x[1]));
+      const _rv={};_remoteJobs.forEach((x,i)=>{if(_remoteRes[i].status==='fulfilled')_rv[x[0]]=_remoteRes[i].value;});
+      if(Array.isArray(_rv.hpg))harianPredGenLog=_rv.hpg;
+      if(Array.isArray(_rv.ps2))predSlotLog[2]=_rv.ps2;
+      if(Array.isArray(_rv.ps3))predSlotLog[3]=_rv.ps3;
+      if(Array.isArray(_rv.ps4))predSlotLog[4]=_rv.ps4;
+      if(Array.isArray(_rv.psv2_2))predSlotLogV2[2]=_rv.psv2_2;
+      if(Array.isArray(_rv.psv2_3))predSlotLogV2[3]=_rv.psv2_3;
+      if(Array.isArray(_rv.psv2_4))predSlotLogV2[4]=_rv.psv2_4;
+      if(Array.isArray(_rv.hv2audit)){
+        harianV2ResultLog=[];harianV2RawDraft={};
+        _rv.hv2audit.forEach(r=>{
           const key=_harianV2ResultKey(r.entry_date,r.sess_key,r.slot);
           if(r.raw)harianV2RawDraft[key]=String(r.raw);
           if(r.result_input||r.result_value||r.cross_slot||r.hit_summary){
-            harianV2ResultLog.push({key,date:r.entry_date,session:r.sess_key,slot:r.slot,raw:r.raw||'',result:r.result_input||'',resultValue:r.result_value||'',resultDigits:r.result_digits||null,resultTrace:r.result_trace||null,crossSlot:!!r.cross_slot,crossSources:r.cross_sources||[],hitSummary:r.hit_summary||null,engine:'HARIAN_V2',engine_version:r.engine_version||'HARIAN-V2-v1.0',ts:r.updated_at||r.created_at});
+            harianV2ResultLog.push({key,date:r.entry_date,session:r.sess_key,slot:r.slot,raw:r.raw||'',result:r.result_input||'',resultValue:r.result_value||'',resultDigits:r.result_digits||null,resultTrace:r.result_trace||null,crossSlot:!!r.cross_slot,crossSources:r.cross_sources||[],hitSummary:r.hit_summary||null,candidates4:r.candidates4||[],candidates3:r.candidates3||[],candidates2:r.candidates2||[],engine:'HARIAN_V2',engine_version:r.engine_version||'HARIAN-V2-v1.0',ts:r.updated_at||r.created_at});
           }
         });
         const seen=new Map();harianV2ResultLog.forEach(r=>seen.set(r.key,r));harianV2ResultLog=[...seen.values()];
-        saveHarianV2RawDraft();saveHarianV2ResultLog();
       }
     }catch(eRemoteHist){
-      // Supabase gagal/offline -- jangan sampai boot mati total, tapi jangan
-      // diam2 pakai data lokal lama juga (sesuai permintaan: tidak ada lagi
-      // histori tersimpan lokal). Mulai dari kosong, nanti otomatis lengkap
-      // lagi begitu koneksi Supabase pulih.
-      harianPredGenLog=[];predSlotLog[2]=[];predSlotLog[3]=[];predSlotLog[4]=[];
-      predSlotLogV2[2]=[];predSlotLogV2[3]=[];predSlotLogV2[4]=[];
+      try{console.warn('[REMOTE HISTORY HYDRATE]',eRemoteHist&&eRemoteHist.message||eRemoteHist);}catch(e){}
     }
     jejakPolaLog=loadJejakPolaLog();
     posCandGenLog=loadPosCandGenLog();
@@ -13755,7 +13795,7 @@ async function boot(){
     // Refresh kedua setelah UI hidup: menangkap kasus token/session baru saja
     // selesai direfresh tepat setelah boot-load pertama. Tidak mengosongkan
     // histori jika request gagal; retry internal maksimal 3 kali.
-    setTimeout(()=>{refreshHarianHistoryRemote('post-login');},250);
+    setTimeout(()=>{refreshHarianHistoryRemote('post-login');try{_harianV2RefreshHistory(true);}catch(e){}},600);
     // GLOBAL TIMELINE + backfill: RAW adalah frontier master.
     // Backfill V1/V2 TIDAK dijalankan otomatis saat boot karena ribuan slot
     // dapat memblokir main thread pada mobile. User menjalankannya dari panel
@@ -16623,6 +16663,8 @@ function _authProceedToApp(client){
   const ov=$id('authOverlay');
   if(ov){ov.style.opacity='0';ov.style.transition='opacity .25s ease';setTimeout(()=>{ov.style.display='none';},250);}
   boot();
+  // Pastikan histori V1/V2 diambil ulang setelah session login baru stabil.
+  setTimeout(()=>{try{refreshHarianHistoryRemote('auth-signed-in');}catch(e){};try{_harianV2RefreshHistory(true);}catch(e){}},1200);
 }
 async function _authGate(){
   const overlay=$id('authOverlay');
