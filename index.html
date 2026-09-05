@@ -11876,7 +11876,7 @@ async function _harianV2RefreshHistory(force=false){
         if(r.raw)harianV2RawDraft[key]=String(r.raw);
         const hasResult=!!(r.result_input||r.result_value||r.cross_slot||r.hit_summary||r.updated_at);
         if(hasResult){
-          byKey.set(key,{key,date:r.entry_date,session:r.sess_key,slot:r.slot,raw:r.raw||'',result:r.result_input||'',resultValue:r.result_value||'',resultDigits:r.result_digits||null,resultTrace:r.result_trace||null,crossSlot:!!r.cross_slot,crossSources:r.cross_sources||[],hitSummary:r.hit_summary||null,engine:'HARIAN_V2',engine_version:r.engine_version||'HARIAN-V2-v1.0',ts:r.updated_at||r.created_at});
+          byKey.set(key,{key,date:r.entry_date,session:r.sess_key,slot:r.slot,raw:r.raw||'',result:r.result_input||'',resultValue:r.result_value||'',resultDigits:r.result_digits||null,resultTrace:r.result_trace||null,crossSlot:!!r.cross_slot,crossSources:r.cross_sources||[],hitSummary:r.hit_summary||null,candidates4:r.candidates4||[],candidates3:r.candidates3||[],candidates2:r.candidates2||[],engine:'HARIAN_V2',engine_version:r.engine_version||'HARIAN-V2-v1.0',ts:r.updated_at||r.created_at});
         }
       });
       harianV2ResultLog=[...byKey.values()].sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))||String(a.session||'').localeCompare(String(b.session||''))||((a.slot||0)-(b.slot||0)));
@@ -11885,6 +11885,7 @@ async function _harianV2RefreshHistory(force=false){
       // Re-render once after remote hydration so logout/login immediately
       // shows the complete V2 history without requiring a new input/save.
       if(typeof renderHarianV2==='function')renderHarianV2();
+      if(typeof renderHarianV2Lengkap==='function')renderHarianV2Lengkap();
     }catch(e){
       // Keep whatever is already visible; retry on the next tab refresh.
     }finally{
@@ -13899,16 +13900,20 @@ async function boot(){
       if(Array.isArray(_rv.psv2_2))predSlotLogV2[2]=_rv.psv2_2;
       if(Array.isArray(_rv.psv2_3))predSlotLogV2[3]=_rv.psv2_3;
       if(Array.isArray(_rv.psv2_4))predSlotLogV2[4]=_rv.psv2_4;
-      if(Array.isArray(_rv.hv2audit)){
-        harianV2ResultLog=[];harianV2RawDraft={};
+      if(Array.isArray(_rv.hv2audit) && _rv.hv2audit.length){
+        // Jangan pernah menghapus cache histori V2 hanya karena query Supabase
+        // mengembalikan [] (mis. session/token belum siap sesaat setelah refresh).
+        // Data remote yang valid di-merge ke cache lokal, lalu remote menjadi sumber
+        // kebenaran untuk entri yang memang berhasil ditarik.
+        const byKey=new Map((Array.isArray(harianV2ResultLog)?harianV2ResultLog:[]).filter(r=>r&&r.key).map(r=>[r.key,r]));
         _rv.hv2audit.forEach(r=>{
           const key=_harianV2ResultKey(r.entry_date,r.sess_key,r.slot);
           if(r.raw)harianV2RawDraft[key]=String(r.raw);
-          if(r.result_input||r.result_value||r.cross_slot||r.hit_summary){
-            harianV2ResultLog.push({key,date:r.entry_date,session:r.sess_key,slot:r.slot,raw:r.raw||'',result:r.result_input||'',resultValue:r.result_value||'',resultDigits:r.result_digits||null,resultTrace:r.result_trace||null,crossSlot:!!r.cross_slot,crossSources:r.cross_sources||[],hitSummary:r.hit_summary||null,candidates4:r.candidates4||[],candidates3:r.candidates3||[],candidates2:r.candidates2||[],engine:'HARIAN_V2',engine_version:r.engine_version||'HARIAN-V2-v1.0',ts:r.updated_at||r.created_at});
+          if(r.result_input||r.result_value||r.cross_slot||r.hit_summary||r.updated_at){
+            byKey.set(key,{key,date:r.entry_date,session:r.sess_key,slot:r.slot,raw:r.raw||'',result:r.result_input||'',resultValue:r.result_value||'',resultDigits:r.result_digits||null,resultTrace:r.result_trace||null,crossSlot:!!r.cross_slot,crossSources:r.cross_sources||[],hitSummary:r.hit_summary||null,candidates4:r.candidates4||[],candidates3:r.candidates3||[],candidates2:r.candidates2||[],engine:'HARIAN_V2',engine_version:r.engine_version||'HARIAN-V2-v1.0',ts:r.updated_at||r.created_at});
           }
         });
-        const seen=new Map();harianV2ResultLog.forEach(r=>seen.set(r.key,r));harianV2ResultLog=[...seen.values()];
+        harianV2ResultLog=[...byKey.values()].sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))||String(a.session||'').localeCompare(String(b.session||''))||((a.slot||0)-(b.slot||0)));
       }
     }catch(eRemoteHist){
       try{console.warn('[REMOTE HISTORY HYDRATE]',eRemoteHist&&eRemoteHist.message||eRemoteHist);}catch(e){}
