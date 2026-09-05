@@ -527,6 +527,7 @@ body.restore-lock-active button,body.restore-lock-active input[type="file"],body
   <div class="tab" id="tab-harianv2" onclick="switchTab('harianv2')" style="color:var(--green)">🧬 HARIAN V2</div>
   <div class="tab" id="tab-harihist" onclick="switchTab('harihist')" style="color:#4dd0e1">📊 RIWAYAT HARIAN</div>
   <div class="tab" id="tab-harilengkap" onclick="switchTab('harilengkap')" style="color:#ff9e6d">📑 RIWAYAT LENGKAP</div>
+  <div class="tab" id="tab-harianv2lengkap" onclick="switchTab('harianv2lengkap')" style="color:#7ee787">🧬 RIWAYAT LENGKAP V2</div>
   <div class="tab" id="tab-predgen" onclick="switchTab('predgen')" style="color:#4dd0e1">🗂 HISTORI KANDIDAT</div>
   <div class="tab" id="tab-audit" onclick="switchTab('audit')" style="color:#e05fd6">📝 AUDIT ORACLE</div>
   <div class="tab" id="tab-eval" onclick="switchTab('eval')" style="color:#ff6b6b">📉 EVAL</div>
@@ -561,6 +562,11 @@ body.restore-lock-active button,body.restore-lock-active input[type="file"],body
 <!-- ============ RIWAYAT LENGKAP — arsip per-entri: raw + PRED + AI PRED + result ============ -->
 <div class="page" id="page-harilengkap">
   <div id="harilengkap-content"></div>
+</div>
+
+<!-- ============ RIWAYAT LENGKAP V2 — arsip khusus HARIAN V2 dari harian_v2_audit ============ -->
+<div class="page" id="page-harianv2lengkap">
+  <div id="harianv2lengkap-content"></div>
 </div>
 
 <!-- ============ HISTORI KANDIDAT PREDIKSI — semua kandidat yg pernah di-generate dari raw input Harian ============ -->
@@ -12058,7 +12064,71 @@ function renderHarianV2(){
 }
 
 
-const ALL_TABS=[2,3,4,'K','dash','harian','harianv2','harilengkap','predgen','audit','eval','pred','predv2','aipred','analisa','rawanalisa','dna','export','harihist','ai','intel'];
+// ============================================================
+// RIWAYAT LENGKAP V2 — arsip khusus HARIAN V2
+// Sumber data: harianV2ResultLog yang di-hydrate dari Supabase
+// harian_v2_audit. Tidak mengubah engine V1/V2 maupun raw_log V1.
+// ============================================================
+let harianV2LengkapPage=0;
+const HARIAN_V2_LENGKAP_PAGE_SIZE=20;
+
+function renderHarianV2Lengkap(){
+  const el=$id('harianv2lengkap-content');if(!el)return;
+  const rows=[...(Array.isArray(harianV2ResultLog)?harianV2ResultLog:[])].filter(r=>r&&((r.raw)||(/^[0-9]{4}$/.test(String(r.resultDigits||r.result||''))))).sort((a,b)=>{
+    return String(b.date||'').localeCompare(String(a.date||''))||String(b.session||'').localeCompare(String(a.session||''))||((b.slot||0)-(a.slot||0));
+  });
+  const totalPages=Math.max(1,Math.ceil(rows.length/HARIAN_V2_LENGKAP_PAGE_SIZE));
+  if(harianV2LengkapPage>=totalPages)harianV2LengkapPage=totalPages-1;
+  if(harianV2LengkapPage<0)harianV2LengkapPage=0;
+  const page=rows.slice(harianV2LengkapPage*HARIAN_V2_LENGKAP_PAGE_SIZE,(harianV2LengkapPage+1)*HARIAN_V2_LENGKAP_PAGE_SIZE);
+
+  let html=`<div class="uni-sub" style="margin-bottom:10px">Arsip khusus <b style="color:var(--green)">HARIAN V2</b> — seluruh data yang sudah tersimpan/tertarik dari <b>harian_v2_audit</b>: RAW, RESULT 4 digit, cross-slot, kandidat 4D/3D/2D, match, rank, dan status JP/ZONK. Total ${rows.length} entri.</div>`;
+  html+=`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+    <div style="font-size:8px;color:var(--dim)">📦 SUMBER: SUPABASE · <b style="color:var(--green)">harian_v2_audit</b></div>
+    <button class="btn btn-sync-harian-v2" style="padding:5px 9px;font-size:8px;color:var(--green)" onclick="syncHarianV2HistoryManual().then(()=>{harianV2LengkapPage=0;renderHarianV2Lengkap();})">↻ SYNC SUPABASE</button>
+  </div>`;
+  if(!rows.length){
+    html+=`<div class="empty">Belum ada arsip HARIAN V2. Setelah RAW dan RESULT V2 tersimpan, datanya akan muncul di sini.</div>`;
+  }else{
+    page.forEach(h=>{
+      const result4=/^\d{4}$/.test(String(h.resultDigits||h.result||''))?String(h.resultDigits||h.result):'';
+      const targets=result4?{4:result4,3:result4.slice(-3),2:result4.slice(-2)}:null;
+      const lists={4:Array.isArray(h.candidates4)?h.candidates4:[],3:Array.isArray(h.candidates3)?h.candidates3:[],2:Array.isArray(h.candidates2)?h.candidates2:[]};
+      const matches=[];
+      if(targets){[4,3,2].forEach(level=>lists[level].forEach((c,i)=>{if(String(c&&c.digits||'')===targets[level])matches.push({level,rank:i+1,digits:String(c.digits||''),target:targets[level],letters:String(c.letters||'')});}));}
+      const hs=h.hitSummary||{};
+      [4,3,2].forEach(level=>{const key=level+'H',rank=hs[key];if(rank&&!matches.some(m=>m.level===level)){matches.push({level,rank,digits:targets?targets[level]:'',target:targets?targets[level]:'',letters:''});}});
+      matches.sort((a,b)=>a.level-b.level||a.rank-b.rank);
+      const isJp=matches.length>0 || Object.values(hs).some(v=>v!==null&&v!==undefined);
+      const status=isJp?`<span class="status-jp">🏆 JP</span>`:`<span class="status-zonk">💀 ZONK</span>`;
+      const cross=h.crossSlot?`CROSS-SLOT${h.crossSources&&h.crossSources.length?' · '+h.crossSources.map(x=>'S'+x).join(', '):''}`:'RAW SENDIRI';
+      const matchHtml=matches.length?matches.map(m=>`<div style="display:flex;gap:6px;align-items:center;margin:3px 0;font-size:8px"><span style="color:var(--dim);min-width:25px">${m.level}D</span><b style="color:var(--gold);min-width:28px">#${m.rank}</b><span style="font-family:'Orbitron',monospace;color:var(--green)">${escapeHtml(m.digits)}</span><span style="color:var(--dim)">= ${escapeHtml(m.target)}</span><span style="margin-left:auto">🏆</span></div>`).join(''):`<div style="font-size:8px;color:var(--accent2)">— TIDAK ADA MATCH 2D/3D/4D —</div>`;
+      const candidateSection=(level,label)=>{
+        const list=lists[level];if(!list.length)return '';
+        return `<div style="margin-top:7px"><div style="font-size:7px;color:var(--green);letter-spacing:1px;margin-bottom:3px">${label} · ${list.length} KANDIDAT</div><div style="display:flex;flex-wrap:wrap;gap:3px">${list.map((c,i)=>{const hit=targets&&String(c&&c.digits||'')===targets[level];return `<span style="display:inline-flex;gap:3px;align-items:center;padding:3px 5px;border:1px solid ${hit?'rgba(255,201,71,.55)':'var(--border)'};border-radius:5px;background:${hit?'rgba(255,201,71,.10)':'var(--panel2)'};font-family:'Orbitron',monospace;font-size:7px;color:${hit?'var(--gold)':'var(--text)'}">${i+1}. ${escapeHtml(String(c.letters||''))} = ${escapeHtml(String(c.digits||''))}${hit?' 🏆':''}</span>`;}).join('')}</div></div>`;
+      };
+      html+=`<div class="section" style="margin-bottom:10px">
+        <div class="section-head" style="cursor:default"><div class="section-head-title"><div class="dot" style="background:var(--green)"></div><span style="color:var(--green)">📅 ${escapeHtml(isoToDisplay(h.date)||h.date||'-')} · 🕐 ${escapeHtml(h.session||'-')} · SLOT ${h.slot||'-'}</span></div><div>${status}</div></div>
+        <div class="section-body open">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:7px">
+            <div style="padding:6px 7px;border:1px solid var(--border);border-radius:6px"><div style="font-size:6px;color:var(--dim);letter-spacing:1px">RAW V2</div><div style="font-family:'Orbitron',monospace;font-size:12px;color:#fff;letter-spacing:1px">${escapeHtml(h.raw||'-')}</div></div>
+            <div style="padding:6px 7px;border:1px solid var(--border);border-radius:6px"><div style="font-size:6px;color:var(--dim);letter-spacing:1px">RESULT INPUT</div><div style="font-family:'Orbitron',monospace;font-size:12px;color:var(--gold);letter-spacing:2px">${escapeHtml(result4||h.result||'-')}</div></div>
+          </div>
+          <div style="font-size:7px;color:var(--dim);margin-bottom:6px">${escapeHtml(cross)} · ENGINE ${escapeHtml(h.engine_version||h.engineVersion||'HARIAN-V2')}</div>
+          <div style="padding:7px 8px;border:1px solid ${matches.length?'rgba(255,201,71,.4)':'var(--border)'};border-radius:6px">
+            <div style="font-size:7px;color:var(--gold);letter-spacing:1px;margin-bottom:4px">🎯 PREDIKSI V2 YANG MATCH</div>${matchHtml}
+          </div>
+          ${candidateSection(4,'4D')}${candidateSection(3,'3D')}${candidateSection(2,'2D')}
+        </div>
+      </div>`;
+    });
+    html+=`<div style="display:flex;justify-content:center;align-items:center;gap:10px;margin:10px 0"><button class="btn btn-undo" style="padding:5px 10px;font-size:9px" ${harianV2LengkapPage<=0?'disabled':''} onclick="harianV2LengkapPage--;renderHarianV2Lengkap()">‹ Prev</button><span style="font-size:9px;color:var(--dim)">Hal ${harianV2LengkapPage+1} / ${totalPages}</span><button class="btn btn-undo" style="padding:5px 10px;font-size:9px" ${harianV2LengkapPage>=totalPages-1?'disabled':''} onclick="harianV2LengkapPage++;renderHarianV2Lengkap()">Next ›</button></div>`;
+  }
+  el.innerHTML=html;
+}
+
+
+const ALL_TABS=[2,3,4,'K','dash','harian','harianv2','harilengkap','harianv2lengkap','predgen','audit','eval','pred','predv2','aipred','analisa','rawanalisa','dna','export','harihist','ai','intel'];
 function switchTab(n){
   ALL_TABS.forEach(t=>{
     const tab=$id('tab'+(typeof t==='number'?t:'-'+t))||$id('tab'+t);
@@ -12080,6 +12150,7 @@ function switchTab(n){
   else if(n==='harianv2'){renderHarianV2();}
   else if(n==='harihist'){renderHariHist();setTimeout(()=>{refreshHarianHistoryRemote('tab-riwayat-harian');},0);}
   else if(n==='harilengkap'){renderHariLengkap();}
+  else if(n==='harianv2lengkap'){renderHarianV2Lengkap();setTimeout(()=>{refreshHarianHistoryRemote('tab-harian-v2-lengkap');},0);}
   else if(n==='predgen'){renderPredGenLog();}
   else if(n==='audit'){renderAuditLog();}
   else if(n==='pred'){if(activePredSub==='KMB')renderPredKmb();else renderPred(activePredSub);}
