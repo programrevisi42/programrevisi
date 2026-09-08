@@ -493,6 +493,7 @@ body.restore-lock-active button,body.restore-lock-active input[type="file"],body
   <h1>TRACKER <em>A-H Modif</em></h1>
   <div class="header-sub">Dashboard · Prediksi · Analisa · DNA · JP/Zonk · Evaluasi · Kembar · Oracle</div>
   <div id="saveIndicator" style="font-size:8px;color:#00e676;letter-spacing:1px;margin-top:4px;opacity:0.55;transition:opacity .2s;">✓ tersimpan</div>
+  <div id="serverClock" style="font-size:9px;color:#7fd8ff;letter-spacing:0.5px;margin-top:4px;opacity:0.7;font-family:monospace;">⏱ Server: --</div>
   <button id="systemUndoBtn" onclick="systemUndo()" style="display:none;margin-top:6px;font-size:9px;padding:5px 10px;border-radius:5px;border:1px solid var(--orange,#ff9800);background:transparent;color:var(--orange,#ff9800);cursor:pointer;letter-spacing:.5px" title="Kembalikan ke kondisi sebelum aksi berisiko terakhir (restore/rollback/generate AI/oracle telat)">↩ UNDO SISTEM</button>
 </div>
 
@@ -2049,6 +2050,13 @@ function deleteHarianLogEntry(idx){
   markRawLogDeleted(entry);
   rawLog.splice(idx,1);
   saveRawLog();
+  // upsertRawLog (dipakai saveRawLog di atas) tidak lagi menghapus baris lama
+  // secara otomatis, jadi hapus baris ini secara eksplisit dari Supabase juga.
+  try{
+    if(typeof SBData!=='undefined'&&SBData.deleteRawLogRow&&entry.date&&entry.session&&typeof entry.slot==='number'){
+      SBData.deleteRawLogRow(entry.date,entry.session,entry.slot).catch(()=>{});
+    }
+  }catch(e){}
   renderHarianLog();
   try{renderAll(2);renderAll(3);renderAll(4);renderNotifBanner();renderDash();}catch(e){}
 }
@@ -3015,10 +3023,10 @@ async function saveRawLog(){
   const status=$id('harianSupabaseStatus');
   if(status){status.textContent='⏳ Menyimpan ke Supabase…';status.style.color='var(--gold)';}
   try{
-    if(typeof SBData==='undefined'||!SBData.replaceRawLog){throw new Error('Modul Supabase belum siap.');}
+    if(typeof SBData==='undefined'||!SBData.upsertRawLog){throw new Error('Modul Supabase belum siap.');}
     let r=null,lastErr=null;
     for(let attempt=1;attempt<=3;attempt++){
-      try{r=await SBData.replaceRawLog(rawLog);if(r&&r.ok)break;lastErr=new Error(r&&r.reason||'Gagal simpan raw_log');}
+      try{r=await SBData.upsertRawLog(rawLog);if(r&&r.ok)break;lastErr=new Error(r&&r.reason||'Gagal simpan raw_log');}
       catch(e){lastErr=e;}
       if(attempt<3)await new Promise(resolve=>setTimeout(resolve,500*attempt));
     }
@@ -14214,6 +14222,12 @@ const SBData=(function(){
     return(data||[]).map(r=>r.payload);
   }
   // HARD-DELETE (bukan soft-delete) — lihat catatan di replaceEntries.
+  // CATATAN (2026-09): replaceRawLog TIDAK dipakai lagi oleh alur simpan normal
+  // (lihat upsertRawLog di bawah) krn pola hapus-semua-lalu-tulis-ulang ini
+  // rawan menghapus riwayat lama kalau array lokal di device sempat menyusut
+  // (mis. race condition sesi login) — pengaman shrink-guard tidak selalu
+  // sempat menyelamatkan. Fungsi ini SENGAJA tidak dihapus/diubah (additive-only),
+  // hanya sudah tidak dipanggil dari mana pun.
   async function replaceRawLog(arr){
     // GUARD (2026-08-22): lihat catatan di replaceEntries.
     if(!arr||!arr.length)return{ok:false,reason:'skip_empty_local_guard'};
@@ -14229,6 +14243,38 @@ const SBData=(function(){
     if(delErr)return{ok:false,reason:delErr.message};
     const rows=(arr||[]).map(e=>({user_id:uid,log_type:'raw',entry_date:(e&&e.date)||null,sess_key:(e&&e.session)||null,slot:(e&&typeof e.slot==='number')?e.slot:null,payload:e}));
     if(rows.length){const{error:insErr}=await c.from('raw_log').insert(rows);if(insErr)return{ok:false,reason:insErr.message};}
+    return{ok:true};
+  }
+
+  // upsertRawLog (2026-09, HARIAN V1 saja -- TIDAK memengaruhi harian_v2_audit
+  // sama sekali): ganti pola replaceRawLog di atas. Upsert per baris
+  // (onConflict user_id,entry_date,sess_key,slot) dalam 1 batch request --
+  // baris lama yg TIDAK ada di array lokal saat ini TIDAK PERNAH dihapus
+  // otomatis di sini. Penghapusan riwayat HANYA lewat deleteRawLogRow
+  // (eksplisit, dipanggil dari deleteHarianLogEntry), jadi array lokal yg
+  // sempat menyusut karena race condition/reload TIDAK BISA lagi menghapus
+  // riwayat lama di server secara tidak sengaja.
+  async function upsertRawLog(arr){
+    if(!arr||!arr.length)return{ok:true,skipped:true}; // tidak ada apa2 utk disimpan, bukan error
+    const c=_client();if(!c)return{ok:false,reason:'no_client'};
+    const uid=await _uid();if(!uid)return{ok:false,reason:'no_user'};
+    const rows=arr.filter(e=>e&&e.date&&e.session&&typeof e.slot==='number')
+      .map(e=>({user_id:uid,log_type:'raw',entry_date:e.date,sess_key:e.session,slot:e.slot,payload:e}));
+    if(!rows.length)return{ok:true,skipped:true};
+    const{error}=await c.from('raw_log').upsert(rows,{onConflict:'user_id,entry_date,sess_key,slot'});
+    if(error)return{ok:false,reason:error.message};
+    return{ok:true};
+  }
+  // deleteRawLogRow (2026-09, HARIAN V1 saja): satu-satunya jalur resmi utk
+  // menghapus riwayat lama dari server sejak upsertRawLog dipakai -- dipanggil
+  // dari deleteHarianLogEntry saat user secara EKSPLISIT menghapus 1 entri.
+  async function deleteRawLogRow(entryDate,sessKey,slot){
+    if(!entryDate||!sessKey||typeof slot!=='number')return{ok:false,reason:'invalid_key'};
+    const c=_client();if(!c)return{ok:false,reason:'no_client'};
+    const uid=await _uid();if(!uid)return{ok:false,reason:'no_user'};
+    const{error}=await c.from('raw_log').delete()
+      .eq('user_id',uid).eq('log_type','raw').eq('entry_date',entryDate).eq('sess_key',sessKey).eq('slot',slot);
+    if(error)return{ok:false,reason:error.message};
     return{ok:true};
   }
 
@@ -14571,7 +14617,7 @@ const SBData=(function(){
     return{ok:true};
   }
 
-  return{loadEntries,replaceEntries,loadRawLogRows,replaceRawLog,replaceLearningState,replaceAuditLog,upsertInsightSnapshot,replaceRawAnalisaLog,replaceOracleAuditLog,replacePredSlotLog,replacePredSlotLogV2,
+  return{loadEntries,replaceEntries,loadRawLogRows,replaceRawLog,upsertRawLog,deleteRawLogRow,replaceLearningState,replaceAuditLog,upsertInsightSnapshot,replaceRawAnalisaLog,replaceOracleAuditLog,replacePredSlotLog,replacePredSlotLogV2,
     loadPredSlotLogRemote,loadPredSlotLogV2Remote,loadHarianPredGenLogRemote,
     replacePredState,replaceHistState,replaceAiPredState,replaceAiPredHist,
     replaceKembarTypeState,replaceKembarTypeHist,replaceKembarPartialLog,replaceKembarEntries,replaceKembarMeta,
@@ -16847,7 +16893,49 @@ function _authProceedToApp(client){
       if(!v1Ok)_retryHistorySyncAfterLogin(delays.slice(1));
     },delays[0]);
   })([1200,2500,4000]);
+  _startServerClock();
 }
+
+// ============================================================
+// JAM SERVER (Additive, 2026-09) -- murni tambahan tampilan, tidak
+// menyentuh data/tabel yg sudah ada. Sumber waktu: fungsi read-only
+// public.server_now() (select now();). Sync tiap 5 menit, detik
+// jalan sendiri di device di antaranya (dikoreksi ke offset server),
+// fallback diam-diam ke jam device kalau gagal/offline.
+// ============================================================
+let _serverClockOffsetMs=0;
+let _serverClockTickTimer=null;
+function _formatServerClock(d){
+  const bulan=['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
+  const pad=n=>String(n).padStart(2,'0');
+  return pad(d.getDate())+' '+bulan[d.getMonth()]+' '+d.getFullYear()+' · '+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds())+' WIB';
+}
+function _tickServerClock(){
+  const el=$id('serverClock');if(!el)return;
+  el.textContent='⏱ Server: '+_formatServerClock(new Date(Date.now()+_serverClockOffsetMs));
+}
+async function _syncServerClock(){
+  try{
+    const c=(typeof SBData!=='undefined'&&SBData.client)?SBData.client():null;
+    if(!c)return;
+    const t0=Date.now();
+    const{data,error}=await c.rpc('server_now');
+    const t1=Date.now();
+    if(error||!data)return;
+    const serverMs=new Date(data).getTime();
+    if(isNaN(serverMs))return;
+    // Kompensasi latensi round-trip (asumsi separuh waktu tempuh utk request).
+    _serverClockOffsetMs=serverMs-(t0+(t1-t0)/2);
+  }catch(e){ /* diam-diam fallback ke jam device, tidak ganggu UI */ }
+}
+function _startServerClock(){
+  if(_serverClockTickTimer)return; // sudah jalan, jangan dobel
+  _syncServerClock();
+  setInterval(_syncServerClock,300000); // re-sync tiap 5 menit
+  _serverClockTickTimer=setInterval(_tickServerClock,1000);
+  _tickServerClock();
+}
+
 async function _authGate(){
   const overlay=$id('authOverlay');
   if(overlay){overlay.style.display='flex';overlay.style.opacity='1';}
