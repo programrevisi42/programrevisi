@@ -6265,9 +6265,51 @@ function _harianV2ComputeSlotCandidatesAsOf(n,asOfDateISO){
   }
   return {candidates:selected,blockedV1:blocked.v1,totalPool:ALL[n].length,historyCount:stats.data.length};
 }
+// ============================================================
+// FILTER POLA KEMBAR (2026-09, additive, shared murni fungsi murni tanpa
+// state) — tepat 1 pasang huruf sama (posisi manapun), sisanya semua beda.
+// Bukan triple/quad, bukan double-pair. Dipakai HARIAN V2 & V3 (independen
+// masing-masing, fungsi ini sendiri tidak menyimpan/membaca apa pun).
+// ============================================================
+function _isKembarPattern(cand){
+  const counts={};
+  for(const ch of String(cand||''))counts[ch]=(counts[ch]||0)+1;
+  const vals=Object.values(counts);
+  const pairCount=vals.filter(v=>v===2).length;
+  const hasHigher=vals.some(v=>v>2);
+  return pairCount===1&&!hasHigher;
+}
+
 function computeHarianV2ForRaw(rawDigits,asOfDateISO){
   const build=n=>_harianV2ComputeSlotCandidatesAsOf(n,asOfDateISO).candidates.map((x,i)=>({letters:x.cand,digits:candidateToDigit(x.cand,rawDigits),rank:i+1,score:x.score})).filter(x=>x.digits);
   return {cand4:build(4),cand3:build(3),cand2:build(2)};
+}
+
+// KEMBAR V2 (2026-09, additive) -- pakai formula skor V2 yg sama persis
+// (freq+trans+cross), cuma disaring ke pola kembar lalu ambil rank 1-10
+// dari hasil saringan itu. Tidak mengubah/menyentuh _harianV2ComputeSlotCandidatesAsOf
+// atau computeHarianV2ForRaw di atas sama sekali.
+function _harianV2KembarCandidatesAsOf(n,asOfDateISO){
+  const stats=_harianV2BuildStats(n,asOfDateISO);
+  const raw=ALL[n].map(c=>({cand:c,..._harianV2RawScoreCandidate(c,stats)}));
+  const nf=_harianV2Normalize(raw.map(x=>x.freq));
+  const nt=_harianV2Normalize(raw.map(x=>x.trans));
+  const nc=_harianV2Normalize(raw.map(x=>x.cross));
+  raw.forEach((x,i)=>{x.score=HARIAN_V2_W_FREQ*nf[i]+HARIAN_V2_W_TRANS*nt[i]+HARIAN_V2_W_CROSS*nc[i];});
+  raw.sort((a,b)=>b.score-a.score||a.cand.localeCompare(b.cand));
+  const kembarOnly=raw.filter(x=>_isKembarPattern(x.cand));
+  const deduped=[],usedExact=new Set(),usedFamilies=new Set();
+  for(const x of kembarOnly){
+    const fam=_harianV2FamilySignature(x.cand);
+    if(usedExact.has(x.cand)||usedFamilies.has(fam))continue;
+    usedExact.add(x.cand);usedFamilies.add(fam);
+    deduped.push(x);
+  }
+  return {candidates:deduped.slice(0,10),totalKembarPool:kembarOnly.length};
+}
+function computeHarianV2KembarForRaw(rawDigits,asOfDateISO){
+  const build=n=>_harianV2KembarCandidatesAsOf(n,asOfDateISO).candidates.map((x,i)=>({letters:x.cand,digits:candidateToDigit(x.cand,rawDigits),rank:i+1,score:x.score})).filter(x=>x.digits);
+  return {kembar4:build(4),kembar3:build(3),kembar2:build(2)};
 }
 
 // ============================================================
@@ -6396,6 +6438,34 @@ function _harianV3ComputeSlotCandidatesAsOf(n,asOfDateISO){
 function computeHarianV3ForRaw(rawDigits,asOfDateISO){
   const build=n=>_harianV3ComputeSlotCandidatesAsOf(n,asOfDateISO).candidates.map((x,i)=>({letters:x.cand,digits:candidateToDigit(x.cand,rawDigits),rank:i+1,score:x.score})).filter(x=>x.digits);
   return {cand4:build(4),cand3:build(3),cand2:build(2)};
+}
+
+// KEMBAR V3 (2026-09, additive) -- salinan independen dari KEMBAR V2 di atas,
+// pakai mesin skor V3 sendiri (identik rumus V2, kode berdiri sendiri).
+// Window rank 11-20 dari pool kembar hasil hitungannya sendiri, TIDAK
+// pernah membaca hasil V2. Tidak menyentuh _harianV3ComputeSlotCandidatesAsOf
+// atau computeHarianV3ForRaw di atas sama sekali.
+function _harianV3KembarCandidatesAsOf(n,asOfDateISO){
+  const stats=_harianV3BuildStats(n,asOfDateISO);
+  const raw=ALL[n].map(c=>({cand:c,..._harianV3RawScoreCandidate(c,stats)}));
+  const nf=_harianV3Normalize(raw.map(x=>x.freq));
+  const nt=_harianV3Normalize(raw.map(x=>x.trans));
+  const nc=_harianV3Normalize(raw.map(x=>x.cross));
+  raw.forEach((x,i)=>{x.score=HARIAN_V3_W_FREQ*nf[i]+HARIAN_V3_W_TRANS*nt[i]+HARIAN_V3_W_CROSS*nc[i];});
+  raw.sort((a,b)=>b.score-a.score||a.cand.localeCompare(b.cand));
+  const kembarOnly=raw.filter(x=>_isKembarPattern(x.cand));
+  const deduped=[],usedExact=new Set(),usedFamilies=new Set();
+  for(const x of kembarOnly){
+    const fam=_harianV3FamilySignature(x.cand);
+    if(usedExact.has(x.cand)||usedFamilies.has(fam))continue;
+    usedExact.add(x.cand);usedFamilies.add(fam);
+    deduped.push(x);
+  }
+  return {candidates:deduped.slice(10,20),totalKembarPool:kembarOnly.length};
+}
+function computeHarianV3KembarForRaw(rawDigits,asOfDateISO){
+  const build=n=>_harianV3KembarCandidatesAsOf(n,asOfDateISO).candidates.map((x,i)=>({letters:x.cand,digits:candidateToDigit(x.cand,rawDigits),rank:i+11,score:x.score})).filter(x=>x.digits);
+  return {kembar4:build(4),kembar3:build(3),kembar2:build(2)};
 }
 
 function _harianComputeSlotCandidatesAsOf(n,asOfDateISO){
@@ -12843,12 +12913,14 @@ function _harianV2SaveResult(dateISO,sessKey,slot){
   const crossSources=[...new Set((trace||[]).filter(t=>t&&t.cross).map(t=>t.slot))];
   const key=_harianV2ResultKey(dateISO,sessKey,slot);
   const pred=raw.length===8?computeHarianV2ForRaw(raw,dateISO):null;
+  const predKembar=raw.length===8?computeHarianV2KembarForRaw(raw,dateISO):null;
   const hitSummary=_harianV2ResultHitSummary(pred,resultValue);
   const hasHit=!!(hitSummary&&Object.values(hitSummary).some(v=>v!==null&&v!==undefined));
   zonk=!hasHit;
   const row={key,date:dateISO,session:sessKey,slot,raw,result,resultValue,resultDigits:/^\d{4}$/.test(result)?result:null,
     resultTrace:trace,matchCount,source,sourceSlot,autoReason,zonk,crossSlot,crossSources,sessRaws:rawList,
-    hitSummary,ts:new Date().toISOString(),engine:'HARIAN_V2',engine_version:'HARIAN-V2-v1.0'};
+    hitSummary,ts:new Date().toISOString(),engine:'HARIAN_V2',engine_version:'HARIAN-V2-v1.0',
+    kembarCandidates4:predKembar?predKembar.kembar4:[],kembarCandidates3:predKembar?predKembar.kembar3:[],kembarCandidates2:predKembar?predKembar.kembar2:[]};
   const idx=harianV2ResultLog.findIndex(x=>x&&x.key===key);
   if(idx>=0)harianV2ResultLog[idx]=row;else harianV2ResultLog.push(row);
   harianV2ResultLog.sort((a,b)=>String(a.date).localeCompare(String(b.date))||String(a.session).localeCompare(String(b.session))||(a.slot-b.slot));
@@ -12856,7 +12928,7 @@ function _harianV2SaveResult(dateISO,sessKey,slot){
   try{
     if(typeof SBData!=='undefined'&&SBData.upsertHarianV2Audit){
       (async()=>{
-        const payload={entry_date:dateISO,sess_key:sessKey,slot,raw,raw_slot_1:rawList[0]?.digits||'',raw_slot_2:rawList[1]?.digits||'',result_input:result,result_value:resultValue,result_digits:/^\d{4}$/.test(result)?result:null,result_trace:trace,cross_slot:crossSlot,cross_sources:crossSources,candidates4:pred?pred.cand4:[],candidates3:pred?pred.cand3:[],candidates2:pred?pred.cand2:[],hit_summary:hitSummary,engine_version:'HARIAN-V2-v1.0'};
+        const payload={entry_date:dateISO,sess_key:sessKey,slot,raw,raw_slot_1:rawList[0]?.digits||'',raw_slot_2:rawList[1]?.digits||'',result_input:result,result_value:resultValue,result_digits:/^\d{4}$/.test(result)?result:null,result_trace:trace,cross_slot:crossSlot,cross_sources:crossSources,candidates4:pred?pred.cand4:[],candidates3:pred?pred.cand3:[],candidates2:pred?pred.cand2:[],kembar_candidates4:predKembar?predKembar.kembar4:[],kembar_candidates3:predKembar?predKembar.kembar3:[],kembar_candidates2:predKembar?predKembar.kembar2:[],hit_summary:hitSummary,engine_version:'HARIAN-V2-v1.0'};
         for(let attempt=1;attempt<=3;attempt++){
           try{const r=await SBData.upsertHarianV2Audit(payload);if(r&&r.ok){if(msg){msg.textContent='✓ Tersimpan · Supabase OK';msg.style.color='var(--green)';}return;}if(attempt===3&&msg){msg.textContent='✓ Lokal tersimpan · Supabase: '+(r&&r.reason||'gagal');msg.style.color='var(--gold)';}}
           catch(e){if(attempt===3&&msg){msg.textContent='✓ Lokal tersimpan · Supabase gagal';msg.style.color='var(--gold)';}}
@@ -12906,7 +12978,7 @@ async function _harianV2RefreshHistory(force=false){
         if(r.raw)harianV2RawDraft[key]=String(r.raw);
         const hasResult=!!(r.result_input||r.result_value||r.cross_slot||r.hit_summary||r.updated_at);
         if(hasResult){
-          byKey.set(key,{key,date:r.entry_date,session:r.sess_key,slot:r.slot,raw:r.raw||'',result:r.result_input||'',resultValue:r.result_value||'',resultDigits:r.result_digits||null,resultTrace:r.result_trace||null,crossSlot:!!r.cross_slot,crossSources:r.cross_sources||[],hitSummary:r.hit_summary||null,candidates4:r.candidates4||[],candidates3:r.candidates3||[],candidates2:r.candidates2||[],engine:'HARIAN_V2',engine_version:r.engine_version||'HARIAN-V2-v1.0',ts:r.updated_at||r.created_at});
+          byKey.set(key,{key,date:r.entry_date,session:r.sess_key,slot:r.slot,raw:r.raw||'',result:r.result_input||'',resultValue:r.result_value||'',resultDigits:r.result_digits||null,resultTrace:r.result_trace||null,crossSlot:!!r.cross_slot,crossSources:r.cross_sources||[],hitSummary:r.hit_summary||null,candidates4:r.candidates4||[],candidates3:r.candidates3||[],candidates2:r.candidates2||[],kembarCandidates4:r.kembar_candidates4||[],kembarCandidates3:r.kembar_candidates3||[],kembarCandidates2:r.kembar_candidates2||[],engine:'HARIAN_V2',engine_version:r.engine_version||'HARIAN-V2-v1.0',ts:r.updated_at||r.created_at});
         }
       });
       harianV2ResultLog=[...byKey.values()].sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))||String(a.session||'').localeCompare(String(b.session||''))||((a.slot||0)-(b.slot||0)));
@@ -13034,6 +13106,14 @@ function renderHarianV2(){
           html+=`<div style="font-size:7px;letter-spacing:1.5px;color:var(--green);margin:7px 0 3px">${label} · ${list.length}/15 kandidat</div>`;
           if(!list.length){html+=`<div class="hv2-empty">Tidak ada kandidat valid setelah filter V1/family.</div>`;return;}
           html+=`<div class="hv2-list">${list.map((c,i)=>`<div class="hv2-item"><span class="hv2-rank">#${i+1}</span><span class="hv2-cand ${cls}">${c.letters}</span><span style="color:var(--dim)">=</span><span style="font-family:'Orbitron',monospace;font-size:10px;letter-spacing:1px;color:#fff">${c.digits}</span><span class="hv2-score">${(c.score*100).toFixed(1)}</span></div>`).join('')}</div>`;
+        });
+        // KEMBAR V2 (2026-09, additive) — pola tepat 1 pasang huruf sama,
+        // rank 1-10 dari pool kembar. Ditambah, tidak menggantikan list di atas.
+        const predKembar=computeHarianV2KembarForRaw(raw,asOf);
+        [['4H',predKembar.kembar4,'c4'],['3H',predKembar.kembar3,'c3'],['2H',predKembar.kembar2,'c2']].forEach(([label,list,cls])=>{
+          html+=`<div style="font-size:7px;letter-spacing:1.5px;color:#ffd54a;margin:9px 0 3px">🧿 KEMBAR ${label} · ${list.length}/10 kandidat (rank 1-10)</div>`;
+          if(!list.length){html+=`<div class="hv2-empty">Belum ada kandidat pola kembar untuk slot ini.</div>`;return;}
+          html+=`<div class="hv2-list">${list.map(c=>`<div class="hv2-item"><span class="hv2-rank">#${c.rank}</span><span class="hv2-cand ${cls}">${c.letters}</span><span style="color:var(--dim)">=</span><span style="font-family:'Orbitron',monospace;font-size:10px;letter-spacing:1px;color:#fff">${c.digits}</span><span class="hv2-score">${(c.score*100).toFixed(1)}</span></div>`).join('')}</div>`;
         });
       }
     }
@@ -13244,12 +13324,14 @@ function _harianV3SaveResult(dateISO,sessKey,slot){
   const crossSources=[...new Set((trace||[]).filter(t=>t&&t.cross).map(t=>t.slot))];
   const key=_harianV3ResultKey(dateISO,sessKey,slot);
   const pred=raw.length===8?computeHarianV3ForRaw(raw,dateISO):null;
+  const predKembar=raw.length===8?computeHarianV3KembarForRaw(raw,dateISO):null;
   const hitSummary=_harianV3ResultHitSummary(pred,resultValue);
   const hasHit=!!(hitSummary&&Object.values(hitSummary).some(v=>v!==null&&v!==undefined));
   zonk=!hasHit;
   const row={key,date:dateISO,session:sessKey,slot,raw,result,resultValue,resultDigits:/^\d{4}$/.test(result)?result:null,
     resultTrace:trace,matchCount,source,sourceSlot,autoReason,zonk,crossSlot,crossSources,sessRaws:rawList,
-    hitSummary,ts:new Date().toISOString(),engine:'HARIAN_V3',engine_version:'HARIAN-V3-v1.0'};
+    hitSummary,ts:new Date().toISOString(),engine:'HARIAN_V3',engine_version:'HARIAN-V3-v1.0',
+    kembarCandidates4:predKembar?predKembar.kembar4:[],kembarCandidates3:predKembar?predKembar.kembar3:[],kembarCandidates2:predKembar?predKembar.kembar2:[]};
   const idx=harianV3ResultLog.findIndex(x=>x&&x.key===key);
   if(idx>=0)harianV3ResultLog[idx]=row;else harianV3ResultLog.push(row);
   harianV3ResultLog.sort((a,b)=>String(a.date).localeCompare(String(b.date))||String(a.session).localeCompare(String(b.session))||(a.slot-b.slot));
@@ -13257,7 +13339,7 @@ function _harianV3SaveResult(dateISO,sessKey,slot){
   try{
     if(typeof SBData!=='undefined'&&SBData.upsertHarianV3Audit){
       (async()=>{
-        const payload={entry_date:dateISO,sess_key:sessKey,slot,raw,raw_slot_1:rawList[0]?.digits||'',raw_slot_2:rawList[1]?.digits||'',result_input:result,result_value:resultValue,result_digits:/^\d{4}$/.test(result)?result:null,result_trace:trace,cross_slot:crossSlot,cross_sources:crossSources,candidates4:pred?pred.cand4:[],candidates3:pred?pred.cand3:[],candidates2:pred?pred.cand2:[],hit_summary:hitSummary,engine_version:'HARIAN-V3-v1.0'};
+        const payload={entry_date:dateISO,sess_key:sessKey,slot,raw,raw_slot_1:rawList[0]?.digits||'',raw_slot_2:rawList[1]?.digits||'',result_input:result,result_value:resultValue,result_digits:/^\d{4}$/.test(result)?result:null,result_trace:trace,cross_slot:crossSlot,cross_sources:crossSources,candidates4:pred?pred.cand4:[],candidates3:pred?pred.cand3:[],candidates2:pred?pred.cand2:[],kembar_candidates4:predKembar?predKembar.kembar4:[],kembar_candidates3:predKembar?predKembar.kembar3:[],kembar_candidates2:predKembar?predKembar.kembar2:[],hit_summary:hitSummary,engine_version:'HARIAN-V3-v1.0'};
         for(let attempt=1;attempt<=3;attempt++){
           try{const r=await SBData.upsertHarianV3Audit(payload);if(r&&r.ok){if(msg){msg.textContent='✓ Tersimpan · Supabase OK';msg.style.color='var(--green)';}return;}if(attempt===3&&msg){msg.textContent='✓ Lokal tersimpan · Supabase: '+(r&&r.reason||'gagal');msg.style.color='var(--gold)';}}
           catch(e){if(attempt===3&&msg){msg.textContent='✓ Lokal tersimpan · Supabase gagal';msg.style.color='var(--gold)';}}
@@ -13307,7 +13389,7 @@ async function _harianV3RefreshHistory(force=false){
         if(r.raw)harianV3RawDraft[key]=String(r.raw);
         const hasResult=!!(r.result_input||r.result_value||r.cross_slot||r.hit_summary||r.updated_at);
         if(hasResult){
-          byKey.set(key,{key,date:r.entry_date,session:r.sess_key,slot:r.slot,raw:r.raw||'',result:r.result_input||'',resultValue:r.result_value||'',resultDigits:r.result_digits||null,resultTrace:r.result_trace||null,crossSlot:!!r.cross_slot,crossSources:r.cross_sources||[],hitSummary:r.hit_summary||null,candidates4:r.candidates4||[],candidates3:r.candidates3||[],candidates2:r.candidates2||[],engine:'HARIAN_V3',engine_version:r.engine_version||'HARIAN-V3-v1.0',ts:r.updated_at||r.created_at});
+          byKey.set(key,{key,date:r.entry_date,session:r.sess_key,slot:r.slot,raw:r.raw||'',result:r.result_input||'',resultValue:r.result_value||'',resultDigits:r.result_digits||null,resultTrace:r.result_trace||null,crossSlot:!!r.cross_slot,crossSources:r.cross_sources||[],hitSummary:r.hit_summary||null,candidates4:r.candidates4||[],candidates3:r.candidates3||[],candidates2:r.candidates2||[],kembarCandidates4:r.kembar_candidates4||[],kembarCandidates3:r.kembar_candidates3||[],kembarCandidates2:r.kembar_candidates2||[],engine:'HARIAN_V3',engine_version:r.engine_version||'HARIAN-V3-v1.0',ts:r.updated_at||r.created_at});
         }
       });
       harianV3ResultLog=[...byKey.values()].sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))||String(a.session||'').localeCompare(String(b.session||''))||((a.slot||0)-(b.slot||0)));
@@ -13425,6 +13507,14 @@ function renderHarianV3(){
           html+=`<div style="font-size:7px;letter-spacing:1.5px;color:var(--green);margin:7px 0 3px">${label} · ${list.length}/15 kandidat</div>`;
           if(!list.length){html+=`<div class="hv2-empty">Tidak ada kandidat valid setelah filter V1/family.</div>`;return;}
           html+=`<div class="hv2-list">${list.map((c,i)=>`<div class="hv2-item"><span class="hv2-rank">#${i+1}</span><span class="hv2-cand ${cls}">${c.letters}</span><span style="color:var(--dim)">=</span><span style="font-family:'Orbitron',monospace;font-size:10px;letter-spacing:1px;color:#fff">${c.digits}</span><span class="hv2-score">${(c.score*100).toFixed(1)}</span></div>`).join('')}</div>`;
+        });
+        // KEMBAR V3 (2026-09, additive) — salinan independen dari KEMBAR V2,
+        // rank 11-20 dari pool kembar hasil hitungan mesin V3 sendiri.
+        const predKembar=computeHarianV3KembarForRaw(raw,asOf);
+        [['4H',predKembar.kembar4,'c4'],['3H',predKembar.kembar3,'c3'],['2H',predKembar.kembar2,'c2']].forEach(([label,list,cls])=>{
+          html+=`<div style="font-size:7px;letter-spacing:1.5px;color:#ffd54a;margin:9px 0 3px">🧿 KEMBAR ${label} · ${list.length}/10 kandidat (rank 11-20)</div>`;
+          if(!list.length){html+=`<div class="hv2-empty">Belum ada kandidat pola kembar untuk slot ini.</div>`;return;}
+          html+=`<div class="hv2-list">${list.map(c=>`<div class="hv2-item"><span class="hv2-rank">#${c.rank}</span><span class="hv2-cand ${cls}">${c.letters}</span><span style="color:var(--dim)">=</span><span style="font-family:'Orbitron',monospace;font-size:10px;letter-spacing:1px;color:#fff">${c.digits}</span><span class="hv2-score">${(c.score*100).toFixed(1)}</span></div>`).join('')}</div>`;
         });
       }
     }
@@ -15337,7 +15427,7 @@ async function boot(){
           const key=_harianV2ResultKey(r.entry_date,r.sess_key,r.slot);
           if(r.raw)harianV2RawDraft[key]=String(r.raw);
           if(r.result_input||r.result_value||r.cross_slot||r.hit_summary||r.updated_at){
-            byKey.set(key,{key,date:r.entry_date,session:r.sess_key,slot:r.slot,raw:r.raw||'',result:r.result_input||'',resultValue:r.result_value||'',resultDigits:r.result_digits||null,resultTrace:r.result_trace||null,crossSlot:!!r.cross_slot,crossSources:r.cross_sources||[],hitSummary:r.hit_summary||null,candidates4:r.candidates4||[],candidates3:r.candidates3||[],candidates2:r.candidates2||[],engine:'HARIAN_V2',engine_version:r.engine_version||'HARIAN-V2-v1.0',ts:r.updated_at||r.created_at});
+            byKey.set(key,{key,date:r.entry_date,session:r.sess_key,slot:r.slot,raw:r.raw||'',result:r.result_input||'',resultValue:r.result_value||'',resultDigits:r.result_digits||null,resultTrace:r.result_trace||null,crossSlot:!!r.cross_slot,crossSources:r.cross_sources||[],hitSummary:r.hit_summary||null,candidates4:r.candidates4||[],candidates3:r.candidates3||[],candidates2:r.candidates2||[],kembarCandidates4:r.kembar_candidates4||[],kembarCandidates3:r.kembar_candidates3||[],kembarCandidates2:r.kembar_candidates2||[],engine:'HARIAN_V2',engine_version:r.engine_version||'HARIAN-V2-v1.0',ts:r.updated_at||r.created_at});
           }
         });
         harianV2ResultLog=[...byKey.values()].sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))||String(a.session||'').localeCompare(String(b.session||''))||((a.slot||0)-(b.slot||0)));
@@ -15350,7 +15440,7 @@ async function boot(){
           const key=_harianV3ResultKey(r.entry_date,r.sess_key,r.slot);
           if(r.raw)harianV3RawDraft[key]=String(r.raw);
           if(r.result_input||r.result_value||r.cross_slot||r.hit_summary||r.updated_at){
-            byKeyV3.set(key,{key,date:r.entry_date,session:r.sess_key,slot:r.slot,raw:r.raw||'',result:r.result_input||'',resultValue:r.result_value||'',resultDigits:r.result_digits||null,resultTrace:r.result_trace||null,crossSlot:!!r.cross_slot,crossSources:r.cross_sources||[],hitSummary:r.hit_summary||null,candidates4:r.candidates4||[],candidates3:r.candidates3||[],candidates2:r.candidates2||[],engine:'HARIAN_V3',engine_version:r.engine_version||'HARIAN-V3-v1.0',ts:r.updated_at||r.created_at});
+            byKeyV3.set(key,{key,date:r.entry_date,session:r.sess_key,slot:r.slot,raw:r.raw||'',result:r.result_input||'',resultValue:r.result_value||'',resultDigits:r.result_digits||null,resultTrace:r.result_trace||null,crossSlot:!!r.cross_slot,crossSources:r.cross_sources||[],hitSummary:r.hit_summary||null,candidates4:r.candidates4||[],candidates3:r.candidates3||[],candidates2:r.candidates2||[],kembarCandidates4:r.kembar_candidates4||[],kembarCandidates3:r.kembar_candidates3||[],kembarCandidates2:r.kembar_candidates2||[],engine:'HARIAN_V3',engine_version:r.engine_version||'HARIAN-V3-v1.0',ts:r.updated_at||r.created_at});
           }
         });
         harianV3ResultLog=[...byKeyV3.values()].sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))||String(a.session||'').localeCompare(String(b.session||''))||((a.slot||0)-(b.slot||0)));
@@ -16100,7 +16190,7 @@ const SBData=(function(){
   async function loadHarianV2AuditRemote(){
     const c=_client();if(!c)return[];
     const uid=await _uid();if(!uid)return[];
-    const{data,error}=await c.from('harian_v2_audit').select('entry_date,sess_key,slot,raw,raw_slot_1,raw_slot_2,result_input,result_value,result_digits,result_trace,cross_slot,cross_sources,candidates4,candidates3,candidates2,hit_summary,engine_version,created_at,updated_at').eq('user_id',uid).order('entry_date',{ascending:true}).order('sess_key',{ascending:true}).order('slot',{ascending:true});
+    const{data,error}=await c.from('harian_v2_audit').select('entry_date,sess_key,slot,raw,raw_slot_1,raw_slot_2,result_input,result_value,result_digits,result_trace,cross_slot,cross_sources,candidates4,candidates3,candidates2,kembar_candidates4,kembar_candidates3,kembar_candidates2,hit_summary,engine_version,created_at,updated_at').eq('user_id',uid).order('entry_date',{ascending:true}).order('sess_key',{ascending:true}).order('slot',{ascending:true});
     if(error){try{console.warn('[HARIAN V2] load Supabase gagal:',error.message||error);}catch(eLog){};return[];}
     return data||[];
   }
@@ -16108,7 +16198,7 @@ const SBData=(function(){
     if(!e||!e.entry_date||!e.sess_key||!e.slot)return{ok:false,reason:'invalid_harian_v2_audit'};
     const c=_client();if(!c)return{ok:false,reason:'no_client'};
     const uid=await _uid();if(!uid)return{ok:false,reason:'no_user'};
-    const row={user_id:uid,entry_date:e.entry_date,sess_key:e.sess_key,slot:e.slot,raw:e.raw||null,raw_slot_1:e.raw_slot_1||null,raw_slot_2:e.raw_slot_2||null,result_input:e.result_input||null,result_value:e.result_value||null,result_digits:e.result_digits||null,result_trace:e.result_trace==null?null:(typeof e.result_trace==='string'?e.result_trace:JSON.stringify(e.result_trace)),cross_slot:e.cross_slot?1:0,cross_sources:e.cross_sources||[],candidates4:e.candidates4||[],candidates3:e.candidates3||[],candidates2:e.candidates2||[],hit_summary:e.hit_summary||null,engine_version:e.engine_version||'HARIAN-V2-v1.0',updated_at:new Date().toISOString()};
+    const row={user_id:uid,entry_date:e.entry_date,sess_key:e.sess_key,slot:e.slot,raw:e.raw||null,raw_slot_1:e.raw_slot_1||null,raw_slot_2:e.raw_slot_2||null,result_input:e.result_input||null,result_value:e.result_value||null,result_digits:e.result_digits||null,result_trace:e.result_trace==null?null:(typeof e.result_trace==='string'?e.result_trace:JSON.stringify(e.result_trace)),cross_slot:e.cross_slot?1:0,cross_sources:e.cross_sources||[],candidates4:e.candidates4||[],candidates3:e.candidates3||[],candidates2:e.candidates2||[],kembar_candidates4:e.kembar_candidates4||[],kembar_candidates3:e.kembar_candidates3||[],kembar_candidates2:e.kembar_candidates2||[],hit_summary:e.hit_summary||null,engine_version:e.engine_version||'HARIAN-V2-v1.0',updated_at:new Date().toISOString()};
     const{error}=await c.from('harian_v2_audit').upsert(row,{onConflict:'user_id,entry_date,sess_key,slot'});
     if(error)return{ok:false,reason:error.message};
     return{ok:true};
@@ -16119,7 +16209,7 @@ const SBData=(function(){
   async function loadHarianV3AuditRemote(){
     const c=_client();if(!c)return[];
     const uid=await _uid();if(!uid)return[];
-    const{data,error}=await c.from('harian_v3_audit').select('entry_date,sess_key,slot,raw,raw_slot_1,raw_slot_2,result_input,result_value,result_digits,result_trace,cross_slot,cross_sources,candidates4,candidates3,candidates2,hit_summary,engine_version,created_at,updated_at').eq('user_id',uid).order('entry_date',{ascending:true}).order('sess_key',{ascending:true}).order('slot',{ascending:true});
+    const{data,error}=await c.from('harian_v3_audit').select('entry_date,sess_key,slot,raw,raw_slot_1,raw_slot_2,result_input,result_value,result_digits,result_trace,cross_slot,cross_sources,candidates4,candidates3,candidates2,kembar_candidates4,kembar_candidates3,kembar_candidates2,hit_summary,engine_version,created_at,updated_at').eq('user_id',uid).order('entry_date',{ascending:true}).order('sess_key',{ascending:true}).order('slot',{ascending:true});
     if(error){try{console.warn('[HARIAN V3] load Supabase gagal:',error.message||error);}catch(eLog){};return[];}
     return data||[];
   }
@@ -16127,7 +16217,7 @@ const SBData=(function(){
     if(!e||!e.entry_date||!e.sess_key||!e.slot)return{ok:false,reason:'invalid_harian_v3_audit'};
     const c=_client();if(!c)return{ok:false,reason:'no_client'};
     const uid=await _uid();if(!uid)return{ok:false,reason:'no_user'};
-    const row={user_id:uid,entry_date:e.entry_date,sess_key:e.sess_key,slot:e.slot,raw:e.raw||null,raw_slot_1:e.raw_slot_1||null,raw_slot_2:e.raw_slot_2||null,result_input:e.result_input||null,result_value:e.result_value||null,result_digits:e.result_digits||null,result_trace:e.result_trace==null?null:(typeof e.result_trace==='string'?e.result_trace:JSON.stringify(e.result_trace)),cross_slot:e.cross_slot?1:0,cross_sources:e.cross_sources||[],candidates4:e.candidates4||[],candidates3:e.candidates3||[],candidates2:e.candidates2||[],hit_summary:e.hit_summary||null,engine_version:e.engine_version||'HARIAN-V3-v1.0',updated_at:new Date().toISOString()};
+    const row={user_id:uid,entry_date:e.entry_date,sess_key:e.sess_key,slot:e.slot,raw:e.raw||null,raw_slot_1:e.raw_slot_1||null,raw_slot_2:e.raw_slot_2||null,result_input:e.result_input||null,result_value:e.result_value||null,result_digits:e.result_digits||null,result_trace:e.result_trace==null?null:(typeof e.result_trace==='string'?e.result_trace:JSON.stringify(e.result_trace)),cross_slot:e.cross_slot?1:0,cross_sources:e.cross_sources||[],candidates4:e.candidates4||[],candidates3:e.candidates3||[],candidates2:e.candidates2||[],kembar_candidates4:e.kembar_candidates4||[],kembar_candidates3:e.kembar_candidates3||[],kembar_candidates2:e.kembar_candidates2||[],hit_summary:e.hit_summary||null,engine_version:e.engine_version||'HARIAN-V3-v1.0',updated_at:new Date().toISOString()};
     const{error}=await c.from('harian_v3_audit').upsert(row,{onConflict:'user_id,entry_date,sess_key,slot'});
     if(error)return{ok:false,reason:error.message};
     return{ok:true};
