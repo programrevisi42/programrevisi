@@ -6279,6 +6279,24 @@ function _isKembarPattern(cand){
   const hasHigher=vals.some(v=>v>2);
   return pairCount===1&&!hasHigher;
 }
+// PENTING: ALL[n] (dipakai kandidat utama V2/V3) dibangun lewat genPerms(n)
+// yang HANYA menghasilkan permutasi huruf BERBEDA SEMUA (tidak pernah ada
+// huruf berulang) -- jadi tidak mungkin ada pola kembar di dalamnya sama
+// sekali. Kandidat kembar butuh pool TERPISAH yang sengaja mengizinkan
+// huruf berulang, baru difilter _isKembarPattern. Cache per-n krn ALL[n]
+// juga statis (LETTERS tidak berubah saat runtime), tidak perlu dihitung ulang.
+const _KEMBAR_POOL_CACHE={};
+function _genKembarCandidates(n){
+  if(_KEMBAR_POOL_CACHE[n])return _KEMBAR_POOL_CACHE[n];
+  const res=[];
+  function h(cur){
+    if(cur.length===n){if(_isKembarPattern(cur.join('')))res.push(cur.join(''));return;}
+    for(const l of LETTERS)h([...cur,l]);
+  }
+  h([]);
+  _KEMBAR_POOL_CACHE[n]=res;
+  return res;
+}
 
 function computeHarianV2ForRaw(rawDigits,asOfDateISO){
   const build=n=>_harianV2ComputeSlotCandidatesAsOf(n,asOfDateISO).candidates.map((x,i)=>({letters:x.cand,digits:candidateToDigit(x.cand,rawDigits),rank:i+1,score:x.score})).filter(x=>x.digits);
@@ -6291,21 +6309,20 @@ function computeHarianV2ForRaw(rawDigits,asOfDateISO){
 // atau computeHarianV2ForRaw di atas sama sekali.
 function _harianV2KembarCandidatesAsOf(n,asOfDateISO){
   const stats=_harianV2BuildStats(n,asOfDateISO);
-  const raw=ALL[n].map(c=>({cand:c,..._harianV2RawScoreCandidate(c,stats)}));
+  const raw=_genKembarCandidates(n).map(c=>({cand:c,..._harianV2RawScoreCandidate(c,stats)}));
   const nf=_harianV2Normalize(raw.map(x=>x.freq));
   const nt=_harianV2Normalize(raw.map(x=>x.trans));
   const nc=_harianV2Normalize(raw.map(x=>x.cross));
   raw.forEach((x,i)=>{x.score=HARIAN_V2_W_FREQ*nf[i]+HARIAN_V2_W_TRANS*nt[i]+HARIAN_V2_W_CROSS*nc[i];});
   raw.sort((a,b)=>b.score-a.score||a.cand.localeCompare(b.cand));
-  const kembarOnly=raw.filter(x=>_isKembarPattern(x.cand));
   const deduped=[],usedExact=new Set(),usedFamilies=new Set();
-  for(const x of kembarOnly){
+  for(const x of raw){
     const fam=_harianV2FamilySignature(x.cand);
     if(usedExact.has(x.cand)||usedFamilies.has(fam))continue;
     usedExact.add(x.cand);usedFamilies.add(fam);
     deduped.push(x);
   }
-  return {candidates:deduped.slice(0,10),totalKembarPool:kembarOnly.length};
+  return {candidates:deduped.slice(0,10),totalKembarPool:raw.length};
 }
 function computeHarianV2KembarForRaw(rawDigits,asOfDateISO){
   const build=n=>_harianV2KembarCandidatesAsOf(n,asOfDateISO).candidates.map((x,i)=>({letters:x.cand,digits:candidateToDigit(x.cand,rawDigits),rank:i+1,score:x.score})).filter(x=>x.digits);
@@ -6447,21 +6464,20 @@ function computeHarianV3ForRaw(rawDigits,asOfDateISO){
 // atau computeHarianV3ForRaw di atas sama sekali.
 function _harianV3KembarCandidatesAsOf(n,asOfDateISO){
   const stats=_harianV3BuildStats(n,asOfDateISO);
-  const raw=ALL[n].map(c=>({cand:c,..._harianV3RawScoreCandidate(c,stats)}));
+  const raw=_genKembarCandidates(n).map(c=>({cand:c,..._harianV3RawScoreCandidate(c,stats)}));
   const nf=_harianV3Normalize(raw.map(x=>x.freq));
   const nt=_harianV3Normalize(raw.map(x=>x.trans));
   const nc=_harianV3Normalize(raw.map(x=>x.cross));
   raw.forEach((x,i)=>{x.score=HARIAN_V3_W_FREQ*nf[i]+HARIAN_V3_W_TRANS*nt[i]+HARIAN_V3_W_CROSS*nc[i];});
   raw.sort((a,b)=>b.score-a.score||a.cand.localeCompare(b.cand));
-  const kembarOnly=raw.filter(x=>_isKembarPattern(x.cand));
   const deduped=[],usedExact=new Set(),usedFamilies=new Set();
-  for(const x of kembarOnly){
+  for(const x of raw){
     const fam=_harianV3FamilySignature(x.cand);
     if(usedExact.has(x.cand)||usedFamilies.has(fam))continue;
     usedExact.add(x.cand);usedFamilies.add(fam);
     deduped.push(x);
   }
-  return {candidates:deduped.slice(10,20),totalKembarPool:kembarOnly.length};
+  return {candidates:deduped.slice(10,20),totalKembarPool:raw.length};
 }
 function computeHarianV3KembarForRaw(rawDigits,asOfDateISO){
   const build=n=>_harianV3KembarCandidatesAsOf(n,asOfDateISO).candidates.map((x,i)=>({letters:x.cand,digits:candidateToDigit(x.cand,rawDigits),rank:i+11,score:x.score})).filter(x=>x.digits);
