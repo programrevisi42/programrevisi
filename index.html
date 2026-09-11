@@ -6484,20 +6484,71 @@ function computeHarianV3KembarForRaw(rawDigits,asOfDateISO){
   return {kembar4:build(4),kembar3:build(3),kembar2:build(2)};
 }
 
+// ============================================================
+// SELEKSI "SPREAD PAKSA" — KHUSUS HARIAN V1 (2026-09, permintaan user:
+// jangan sampai 1-2 huruf memonopoli daftar kandidat spt kasus HARIAN V2
+// "AB" kemarin; V1 dijadikan pembanding "random terukur"). SENGAJA fungsi
+// BARU terpisah, TIDAK menyentuh diversifyCandidates/injectPositionalCandidates
+// di atas sama sekali -- kedua fungsi itu dipakai 15+ tempat lain (PRED V1,
+// KEMBAR, backfill, dll) yang TIDAK BOLEH ikut berubah. Hanya dipakai oleh
+// _harianComputeSlotCandidatesAsOf di bawah (yang sejak 2026-09-02 memang
+// sudah jadi salinan independen milik HARIAN sendiri).
+//
+// Cara kerja: dari daftar kandidat yg SUDAH terurut skor (fullLive, dari
+// scoreCandidatesCombinedAsOf, TIDAK diubah rumusnya), pilih satu demi satu
+// mengikuti urutan skor tertinggi, TAPI lewati kandidat yang akan membuat
+// huruf manapun melebihi kuota rata (cap = ceil(topN*n/8) -- pembagian rata
+// 8 huruf raw ke seluruh slot huruf di daftar akhir). Hasilnya: kandidat
+// tetap diprioritaskan skor tertinggi selama tidak melanggar kuota, tapi
+// begitu 1 huruf sudah "kebagian jatah", kandidat berikutnya yg pakai huruf
+// itu otomatis dilewati demi kandidat lain -- menjamin 8 huruf raw benar2
+// tersebar rata, bukan cuma soft-penalty spt diversifyCandidates lama.
+function _harianForceSpreadSelect(sortedList,topN,n){
+  if(!sortedList||!sortedList.length||!topN)return(sortedList||[]).slice(0,topN||0);
+  if(sortedList.length<=topN)return sortedList.slice(0,topN);
+  const cap=Math.ceil(topN*n/LETTERS.length);
+  const letterCount={};
+  const remaining=sortedList.slice();
+  const picked=[];
+  while(picked.length<topN&&remaining.length){
+    let chosenIdx=-1;
+    for(let i=0;i<remaining.length;i++){
+      const chars=[...remaining[i].cand];
+      const wouldExceed=chars.some(c=>(letterCount[c]||0)+1>cap);
+      if(!wouldExceed){chosenIdx=i;break;}
+    }
+    if(chosenIdx===-1){
+      // Jaga-jaga (harusnya jarang kena krn cap dihitung dari pembagian rata):
+      // tidak ada kandidat yg muat tanpa lewati kuota manapun -- ambil yg
+      // membuat huruf paling sedikit "kelebihan" drpd berhenti sebelum topN penuh.
+      let bestIdx=0,bestMax=Infinity;
+      for(let i=0;i<remaining.length;i++){
+        const chars=[...remaining[i].cand];
+        let maxAfter=0;for(const c of chars){const v=(letterCount[c]||0)+1;if(v>maxAfter)maxAfter=v;}
+        if(maxAfter<bestMax){bestMax=maxAfter;bestIdx=i;}
+      }
+      chosenIdx=bestIdx;
+    }
+    const chosen=remaining[chosenIdx];
+    for(const c of chosen.cand)letterCount[c]=(letterCount[c]||0)+1;
+    picked.push(chosen);
+    remaining.splice(chosenIdx,1);
+  }
+  return picked;
+}
+
 function _harianComputeSlotCandidatesAsOf(n,asOfDateISO){
   const fullLive=scoreCandidatesCombinedAsOf(n,ALL[n].length,asOfDateISO);
-  const tagged=injectPositionalCandidates(fullLive,diversifyCandidates(fullLive,15),n,asOfDateISO);
-  const candidates=tagged.map(s=>s.cand);
-  const candidateSources=tagged.map(s=>s.source||'core');
+  const picked=_harianForceSpreadSelect(fullLive,30,n);
+  const candidates=picked.map(s=>s.cand);
+  const candidateSources=picked.map(()=>'spread');
 
-  // TIER 2 (disalin apa adanya dari versi asli, walau computeSlotPredLocal
-  // saat ini cuma pakai Tier 1 -- disiapkan biar salinan ini benar2 identik
-  // fungsionalitasnya dengan aslinya, bukan versi terpotong).
+  // TIER 2 (spread paksa juga, dari sisa kandidat yg belum kepakai Tier 1).
   const usedByTier1=new Set(candidates);
   const remaining=fullLive.filter(s=>!usedByTier1.has(s.cand));
-  const taggedT2=injectPositionalCandidates(remaining,diversifyCandidates(remaining,15),n,asOfDateISO);
-  const candidatesTier2=taggedT2.map(s=>s.cand);
-  const candidateSourcesTier2=taggedT2.map(s=>s.source||'core');
+  const pickedT2=_harianForceSpreadSelect(remaining,30,n);
+  const candidatesTier2=pickedT2.map(s=>s.cand);
+  const candidateSourcesTier2=pickedT2.map(()=>'spread');
 
   return{candidates,candidateSources,candidatesTier2,candidateSourcesTier2};
 }
